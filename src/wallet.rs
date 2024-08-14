@@ -28,6 +28,7 @@ use std::ops::{AddAssign, Deref, DerefMut};
 #[cfg(feature = "fs")]
 use std::path::PathBuf;
 
+use amplify::Getters;
 use bpstd::{
     Address, AddressNetwork, DerivedAddr, Descriptor, Idx, IdxBase, Keychain, Network, NormalIndex,
     Outpoint, Sats, Txid, Vout,
@@ -194,14 +195,14 @@ impl<L2C: Layer2Cache> WalletCache<L2C> {
         }
     }
 
-    pub fn with<I: Indexer, K, D: Descriptor<K>, L2: Layer2<Cache = L2C>>(
+    pub fn with<I: Indexer, K, D: Descriptor<K>, L2: Layer2<Cache=L2C>>(
         descriptor: &WalletDescr<K, D, L2::Descr>,
         indexer: &I,
     ) -> MayError<Self, Vec<I::Error>> {
         indexer.create::<K, D, L2>(descriptor)
     }
 
-    pub fn update<I: Indexer, K, D: Descriptor<K>, L2: Layer2<Cache = L2C>>(
+    pub fn update<I: Indexer, K, D: Descriptor<K>, L2: Layer2<Cache=L2C>>(
         &mut self,
         descriptor: &WalletDescr<K, D, L2::Descr>,
         indexer: &I,
@@ -231,7 +232,7 @@ impl<L2C: Layer2Cache> WalletCache<L2C> {
         })
     }
 
-    pub fn all_utxos(&self) -> impl Iterator<Item = WalletUtxo> + '_ {
+    pub fn all_utxos(&self) -> impl Iterator<Item=WalletUtxo> + '_ {
         self.utxo.iter().map(|outpoint| {
             let tx = self.tx.get(&outpoint.txid).expect("cache data inconsistency");
             let debit = tx.outputs.get(outpoint.vout_usize()).expect("cache data inconsistency");
@@ -260,9 +261,10 @@ pub trait Save {
     fn save(&self) -> Result<bool, Self::SaveErr>;
 }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Getters, Eq, PartialEq, Debug)]
 pub struct Wallet<K, D: Descriptor<K>, L2: Layer2 = NoLayer2>
-where Self: Save
+where
+    Self: Save,
 {
     descr: WalletDescr<K, D, L2::Descr>,
     data: WalletData<L2::Data>,
@@ -274,7 +276,8 @@ where Self: Save
 }
 
 impl<K, D: Descriptor<K>, L2: Layer2> Deref for Wallet<K, D, L2>
-where Self: Save
+where
+    Self: Save,
 {
     type Target = WalletDescr<K, D, L2::Descr>;
 
@@ -282,7 +285,8 @@ where Self: Save
 }
 
 impl<K, D: Descriptor<K>, L2: Layer2> PsbtConstructor for Wallet<K, D, L2>
-where Self: Save
+where
+    Self: Save,
 {
     type Key = K;
     type Descr = D;
@@ -309,7 +313,8 @@ where Self: Save
 }
 
 impl<K, D: Descriptor<K>> Wallet<K, D>
-where Self: Save
+where
+    Self: Save,
 {
     pub fn new_layer1(descr: D, network: Network) -> Self {
         Wallet {
@@ -325,7 +330,8 @@ where Self: Save
 }
 
 impl<K, D: Descriptor<K>, L2: Layer2> Wallet<K, D, L2>
-where Self: Save
+where
+    Self: Save,
 {
     pub fn new_layer2(descr: D, l2_descr: L2::Descr, layer2: L2, network: Network) -> Self {
         Wallet {
@@ -336,6 +342,18 @@ where Self: Save
             dirty: false,
             #[cfg(feature = "fs")]
             fs: None,
+        }
+    }
+
+    pub fn restore(descr: WalletDescr<K, D, L2::Descr>, data: WalletData<L2::Data>, cache: WalletCache<L2::Cache>, layer2: L2) -> Self {
+        Self {
+            descr,
+            data,
+            cache,
+            layer2,
+            #[cfg(feature = "fs")]
+            fs: None,
+            dirty: true,
         }
     }
 
@@ -424,7 +442,7 @@ where Self: Save
     pub fn transactions(&self) -> &BTreeMap<Txid, WalletTx> { &self.cache.tx }
 
     #[inline]
-    pub fn coins(&self) -> impl Iterator<Item = CoinRow<<L2::Cache as Layer2Cache>::Coin>> + '_ {
+    pub fn coins(&self) -> impl Iterator<Item=CoinRow<<L2::Cache as Layer2Cache>::Coin>> + '_ {
         self.cache.coins()
     }
 
@@ -438,22 +456,22 @@ where Self: Save
         })
     }
 
-    pub fn address_balance(&self) -> impl Iterator<Item = WalletAddr> + '_ {
+    pub fn address_balance(&self) -> impl Iterator<Item=WalletAddr> + '_ {
         self.cache.addr.values().flat_map(|set| set.iter()).copied()
     }
 
     #[inline]
-    pub fn history(&self) -> impl Iterator<Item = TxRow<<L2::Cache as Layer2Cache>::Tx>> + '_ {
+    pub fn history(&self) -> impl Iterator<Item=TxRow<<L2::Cache as Layer2Cache>::Tx>> + '_ {
         self.cache.history()
     }
 
-    pub fn all_utxos(&self) -> impl Iterator<Item = WalletUtxo> + '_ { self.cache.all_utxos() }
+    pub fn all_utxos(&self) -> impl Iterator<Item=WalletUtxo> + '_ { self.cache.all_utxos() }
 
     pub fn coinselect<'a>(
         &'a self,
         up_to: Sats,
         selector: impl Fn(&WalletUtxo) -> bool + 'a,
-    ) -> impl Iterator<Item = Outpoint> + '_ {
+    ) -> impl Iterator<Item=Outpoint> + '_ {
         let mut selected = Sats::ZERO;
         self.all_utxos()
             .filter(selector)
@@ -556,12 +574,12 @@ pub mod fs {
 
     impl<K, D: Descriptor<K>, L2: Layer2> Wallet<K, D, L2>
     where
-        for<'de> WalletDescr<K, D>: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> D: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Descr: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Data: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Cache: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> WalletDescr<K, D>: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> D: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Descr: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Data: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Cache: serde::Serialize + serde::Deserialize<'de>,
     {
         pub fn load(
             path: &Path,
@@ -608,12 +626,12 @@ pub mod fs {
 
     impl<K, D: Descriptor<K>, L2: Layer2> Save for Wallet<K, D, L2>
     where
-        for<'de> WalletDescr<K, D>: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> D: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Descr: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Data: serde::Serialize + serde::Deserialize<'de>,
-        for<'de> L2::Cache: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> WalletDescr<K, D>: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> D: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Descr: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Data: serde::Serialize + serde::Deserialize<'de>,
+            for<'de> L2::Cache: serde::Serialize + serde::Deserialize<'de>,
     {
         type SaveErr = StoreError<L2::StoreError>;
 
@@ -635,7 +653,8 @@ pub mod fs {
     }
 
     impl<K, D: Descriptor<K>, L2: Layer2> Drop for Wallet<K, D, L2>
-    where Wallet<K, D, L2>: Save
+    where
+        Wallet<K, D, L2>: Save,
     {
         fn drop(&mut self) {
             if self.dirty && self.fs.as_ref().map(|fs| fs.autosave).unwrap_or_default() {
