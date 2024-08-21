@@ -84,6 +84,35 @@ pub enum Command {
         #[clap(short = 'C', long, default_value = "1")]
         count: u8,
     },
+
+    /// Finalize a PSBT, optionally extracting and publishing the signed transaction
+    #[display("finalize")]
+    Finalize {
+        /// Extract and send the signed transaction to the network.
+        #[clap(short, long)]
+        publish: bool,
+
+        /// Name of PSBT file to finalize.
+        psbt: PathBuf,
+
+        /// File to save the extracted signed transaction.
+        tx: Option<PathBuf>,
+    },
+
+    /// Extract a signed transaction from PSBT. The PSBT file itself is not modified
+    #[display("finalize")]
+    Extract {
+        /// Send the extracted transaction to the network.
+        #[clap(short, long)]
+        publish: bool,
+
+        /// Name of PSBT file to take the transaction from
+        psbt: PathBuf,
+
+        /// File to save the extracted signed transaction. If not provided, the transaction is
+        /// print to STDOUT.
+        tx: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Clone, PartialEq, Eq, Debug, Display)]
@@ -145,35 +174,6 @@ pub enum BpCommand {
 
         /// Name of a PSBT file to save. If not given, prints PSBT to STDOUT
         psbt: Option<PathBuf>,
-    },
-
-    /// Finalize a PSBT, optionally extracting and publishing the signed transaction
-    #[display("finalize")]
-    Finalize {
-        /// Extract and send the signed transaction to the network.
-        #[clap(short, long)]
-        publish: bool,
-
-        /// Name of PSBT file to finalize.
-        psbt: PathBuf,
-
-        /// File to save the extracted signed transaction.
-        tx: Option<PathBuf>,
-    },
-
-    /// Extract a signed transaction from PSBT. The PSBT file itself is not modified.
-    #[display("finalize")]
-    Extract {
-        /// Send the extracted transaction to the network.
-        #[clap(short, long)]
-        publish: bool,
-
-        /// Name of PSBT file to take the transaction from
-        psbt: PathBuf,
-
-        /// File to save the extracted signed transaction. If not provided, the transaction is
-        /// print to STDOUT.
-        tx: Option<PathBuf>,
     },
 }
 
@@ -307,6 +307,49 @@ impl<O: DescriptorOpts> Exec for Args<Command, O> {
                     wallet.addresses(keychain).skip(index.index() as usize).take(*no as usize)
                 {
                     println!("{}\t{}", derived_addr.terminal, derived_addr.addr);
+                }
+            }
+            Command::Finalize {
+                publish,
+                psbt: psbt_path,
+                tx,
+            } => {
+                let mut psbt = psbt_read(psbt_path)?;
+                if psbt.is_finalized() {
+                    eprintln!("The PSBT is already finalized");
+                } else {
+                    let wallet = self.bp_wallet::<O::Descr>(&config)?;
+                    psbt_finalize(&mut psbt, wallet.descriptor())?;
+                }
+
+                psbt_write(&psbt, psbt_path)?;
+                if let Ok(tx) = psbt_extract(&psbt, *publish, tx.as_deref()) {
+                    if *publish {
+                        let indexer = self.indexer()?;
+                        eprint!("Publishing transaction via {} ... ", indexer.name());
+                        indexer.publish(&tx)?;
+                        eprintln!("success");
+                    }
+                }
+            }
+            Command::Extract {
+                publish,
+                psbt: psbt_path,
+                tx,
+            } => {
+                let mut psbt = psbt_read(psbt_path)?;
+                if !psbt.is_finalized() {
+                    let wallet = self.bp_wallet::<O::Descr>(&config)?;
+                    psbt_finalize(&mut psbt, wallet.descriptor())?;
+                }
+
+                if let Ok(tx) = psbt_extract(&psbt, *publish, tx.as_deref()) {
+                    if *publish {
+                        let indexer = self.indexer()?;
+                        eprint!("Publishing transaction via {} ... ", indexer.name());
+                        indexer.publish(&tx)?;
+                        eprintln!("success");
+                    }
                 }
             }
         }
@@ -449,7 +492,7 @@ impl<O: DescriptorOpts> Exec for Args<BpCommand, O> {
                 );
             }
             BpCommand::Inspect { psbt } => {
-                let psbt = psbt_read(&psbt)?;
+                let psbt = psbt_read(psbt)?;
                 println!(
                     "{}",
                     serde_yaml::to_string(&psbt).expect("unable to generate YAML representation")
@@ -488,49 +531,6 @@ impl<O: DescriptorOpts> Exec for Args<BpCommand, O> {
                 psbt.version = if *v2 { PsbtVer::V2 } else { PsbtVer::V0 };
                 psbt_write_or_print(&psbt, psbt_file.as_deref())?;
             }
-            BpCommand::Finalize {
-                publish,
-                psbt: psbt_path,
-                tx,
-            } => {
-                let mut psbt = psbt_read(&psbt_path)?;
-                if psbt.is_finalized() {
-                    eprintln!("The PSBT is already finalized");
-                } else {
-                    let wallet = self.bp_wallet::<O::Descr>(&config)?;
-                    psbt_finalize(&mut psbt, wallet.descriptor())?;
-                }
-
-                psbt_write(&psbt, &psbt_path)?;
-                if let Ok(tx) = psbt_extract(&psbt, *publish, tx.as_deref()) {
-                    if *publish {
-                        let indexer = self.indexer()?;
-                        eprint!("Publishing transaction via {} ... ", indexer.name());
-                        indexer.publish(&tx)?;
-                        eprintln!("success");
-                    }
-                }
-            }
-            BpCommand::Extract {
-                publish,
-                psbt: psbt_path,
-                tx,
-            } => {
-                let mut psbt = psbt_read(&psbt_path)?;
-                if !psbt.is_finalized() {
-                    let wallet = self.bp_wallet::<O::Descr>(&config)?;
-                    psbt_finalize(&mut psbt, wallet.descriptor())?;
-                }
-
-                if let Ok(tx) = psbt_extract(&psbt, *publish, tx.as_deref()) {
-                    if *publish {
-                        let indexer = self.indexer()?;
-                        eprint!("Publishing transaction via {} ... ", indexer.name());
-                        indexer.publish(&tx)?;
-                        eprintln!("success");
-                    }
-                }
-            }
         };
 
         println!();
@@ -549,7 +549,7 @@ fn psbt_read(psbt_path: &Path) -> Result<Psbt, ExecError> {
 
 fn psbt_write(psbt: &Psbt, psbt_path: &Path) -> Result<(), ExecError> {
     eprint!("Saving PSBT to file {} ... ", psbt_path.display());
-    let mut psbt_file = File::create(&psbt_path)?;
+    let mut psbt_file = File::create(psbt_path)?;
     psbt.encode(psbt.version, &mut psbt_file)?;
     eprintln!("success");
     Ok(())
@@ -558,7 +558,7 @@ fn psbt_write(psbt: &Psbt, psbt_path: &Path) -> Result<(), ExecError> {
 fn psbt_write_or_print(psbt: &Psbt, psbt_path: Option<&Path>) -> Result<(), ExecError> {
     match psbt_path {
         Some(file_name) => {
-            psbt_write(&psbt, file_name)?;
+            psbt_write(psbt, file_name)?;
         }
         None => match psbt.version {
             PsbtVer::V0 => println!("{psbt}"),
