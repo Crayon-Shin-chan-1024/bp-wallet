@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Deref};
 
+use amplify::Getters;
 use bpstd::{
     Address, AddressNetwork, DerivedAddr, Descriptor, Idx, IdxBase, Keychain, Network, NormalIndex,
     Outpoint, Sats, Txid, Vout,
@@ -379,7 +380,7 @@ impl<L2: Layer2Cache> Drop for WalletCache<L2> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Getters)]
 pub struct Wallet<K, D: Descriptor<K>, L2: Layer2 = NoLayer2> {
     descr: WalletDescr<K, D, L2::Descr>,
     data: WalletData<L2::Data>,
@@ -438,6 +439,10 @@ impl<K, D: Descriptor<K>> Wallet<K, D> {
             layer2: none!(),
         }
     }
+
+    pub fn detach(self) -> (WalletDescr<K, D>, WalletData<NoLayer2>, WalletCache<NoLayer2>) {
+        (self.descr, self.data, self.cache)
+    }
 }
 
 impl<K, D: Descriptor<K>, L2: Layer2> Wallet<K, D, L2> {
@@ -446,6 +451,15 @@ impl<K, D: Descriptor<K>, L2: Layer2> Wallet<K, D, L2> {
             cache: WalletCache::new_nonsync(&descr),
             descr: WalletDescr::new_layer2(descr, l2_descr, network),
             data: empty!(),
+            layer2,
+        }
+    }
+
+    pub fn restore(descr: WalletDescr<K, D, L2::Descr>, data: WalletData<L2::Data>, cache: WalletCache<L2::Cache>, layer2: L2) -> Self {
+        Self {
+            descr,
+            data,
+            cache,
             layer2,
         }
     }
